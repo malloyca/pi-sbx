@@ -32,6 +32,15 @@ const ROUTED_TOOLS = new Set(["bash", "edit", "find", "grep", "ls", "read", "wri
 const DEFAULT_COMMAND_TIMEOUT_SECONDS = 60;
 const DEFAULT_GREP_LIMIT = 100;
 const MAX_HOST_TOOL_NAMES = 10;
+// Tools that must not run in subagent child sessions (pi --mode json -p --no-session).
+// The launcher is the only thing that spawns such sessions; blocking here keeps
+// agents from spawning agents (recursion + prompt-injection dispatch path).
+const CHILD_SESSION_BLOCKED_TOOLS = new Set(["subagent"]);
+
+export function isChildSession(argv: string[] = process.argv): boolean {
+	const modeIndex = argv.indexOf("--mode");
+	return argv.includes("--no-session") || (modeIndex !== -1 && argv[modeIndex + 1] === "json");
+}
 const EXECUTION_TARGET_DESCRIPTION =
 	'Where to execute this tool call. Omit this or use "sandbox" normally. Use "host" only when sandbox execution cannot perform the operation; host execution requires user approval while sandboxing is active.';
 
@@ -553,6 +562,12 @@ export default function piSbxExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		if (CHILD_SESSION_BLOCKED_TOOLS.has(event.toolName) && isChildSession()) {
+			return {
+				block: true,
+				reason: `Tool ${event.toolName} is blocked in subagent child sessions; only top-level sessions may use it.`,
+			};
+		}
 		if (!selectedSandbox() || !ROUTED_TOOLS.has(event.toolName)) return;
 		const input = event.input as Record<string, unknown>;
 		if (input.execution_target !== "host") return;

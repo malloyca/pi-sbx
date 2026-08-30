@@ -6,6 +6,7 @@ import test from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import piSbxExtension, {
 	hostApprovalMessage,
+	isChildSession,
 	withoutExecutionTarget,
 } from "../extensions/pi-sbx/index.ts";
 
@@ -183,6 +184,62 @@ test("routes every approved built-in tool to the host", async (t) => {
 
 	assert.equal(await readFile(filePath, "utf8"), "beta\n");
 	assert.equal(harness.confirmations.length, calls.length);
+});
+
+test("detects subagent child sessions from argv", () => {
+	assert.equal(isChildSession(["node", "pi", "--no-session"]), true);
+	assert.equal(isChildSession(["node", "pi", "--mode", "json"]), true);
+	assert.equal(isChildSession(["node", "pi", "--mode", "json", "-p", "--no-session"]), true);
+	assert.equal(isChildSession(["node", "pi"]), false);
+	assert.equal(isChildSession(["node", "pi", "-p"]), false);
+	assert.equal(isChildSession(["node", "pi", "--mode", "tui"]), false);
+	assert.equal(isChildSession(["node", "pi", "--mode"]), false);
+	assert.equal(isChildSession(["node", "pi", "--not-no-session"]), false);
+});
+
+function withArgv(argv: string[], fn: () => Promise<void>): Promise<void> {
+	const original = process.argv;
+	return Promise.resolve()
+		.then(() => {
+			process.argv = argv;
+			return fn();
+		})
+		.finally(() => {
+			process.argv = original;
+		});
+}
+
+test("allows subagent dispatch from top-level sessions", async () => {
+	const harness = createHarness();
+	await startHarness(harness);
+
+	await withArgv(["node", "pi"], async () => {
+		const [result] = await harness.emit("tool_call", toolCall("subagent", "top-level", { agent: "paper", task: "x" }));
+		assert.equal(result, undefined);
+	});
+});
+
+test("blocks subagent dispatch in child sessions while a sandbox is active", async () => {
+	const harness = createHarness();
+	await startHarness(harness);
+
+	await withArgv(["node", "pi", "--mode", "json", "-p", "--no-session"], async () => {
+		const [result] = await harness.emit("tool_call", toolCall("subagent", "child-dispatch", { agent: "paper", task: "x" }));
+		assert.deepEqual(result, {
+			block: true,
+			reason: "Tool subagent is blocked in subagent child sessions; only top-level sessions may use it.",
+		});
+	});
+});
+
+test("blocks subagent dispatch in child sessions even in host fallback mode", async () => {
+	const harness = createHarness({ sandbox: false });
+	await startHarness(harness);
+
+	await withArgv(["node", "pi", "--no-session"], async () => {
+		const [result] = await harness.emit("tool_call", toolCall("subagent", "child-dispatch-fallback", {}));
+		assert.equal(result?.block, true);
+	});
 });
 
 test("does not prompt for normal sandbox calls and allows extension tools on the host", async () => {

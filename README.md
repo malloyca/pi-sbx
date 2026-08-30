@@ -103,6 +103,7 @@ If no matching sandbox exists—or `sbx` cannot be discovered—the extension fa
 - Host environment variables are not forwarded to sandboxed shell commands.
 - An approved `execution_target: "host"` call runs with Pi's normal host permissions and environment. Treat the confirmation as a sandbox escape authorization.
 - Extension-provided tools execute in Pi's host process and are not intercepted or approved by pi-sbx. Only install trusted extensions and review their tool behavior.
+- `subagent` is blocked in subagent child sessions (`--no-session` / `--mode json` in argv), so agents cannot spawn agents. Extend `CHILD_SESSION_BLOCKED_TOOLS` in `extensions/pi-sbx/index.ts` to block other tools in child sessions.
 - When no sandbox is available, Pi's normal host-tool behavior is preserved.
 - Do not combine `pi-sbx` with another extension that overrides the same built-in tool names.
 
