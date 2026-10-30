@@ -8,10 +8,6 @@ export interface SbxSandbox {
 	workspaces: string[];
 }
 
-interface SbxListResponse {
-	sandboxes?: unknown;
-}
-
 function mountedPath(value: string): string {
 	return value.endsWith(":ro") ? value.slice(0, -3) : value;
 }
@@ -22,18 +18,23 @@ function containsPath(root: string, value: string): boolean {
 }
 
 export function parseMatchingSandboxes(output: string, cwd: string): SbxSandbox[] {
-	let parsed: SbxListResponse;
+	let parsed: unknown;
 	try {
-		parsed = JSON.parse(output) as SbxListResponse;
+		parsed = JSON.parse(output);
 	} catch (error) {
 		throw new Error(`Could not parse sbx ls --json output: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
-	if (!Array.isArray(parsed.sandboxes)) {
-		throw new Error("Could not parse sbx ls --json output: missing sandboxes array");
+	let sandboxes: unknown[];
+	if (Array.isArray(parsed)) {
+		sandboxes = parsed;
+	} else if (parsed !== null && typeof parsed === "object" && "sandboxes" in parsed && Array.isArray(parsed.sandboxes)) {
+		sandboxes = parsed.sandboxes;
+	} else {
+		throw new Error("Could not parse sbx ls --json output: expected an array or an object containing a sandboxes array");
 	}
 
-	return parsed.sandboxes
+	return sandboxes
 		.filter((value): value is Record<string, unknown> => value !== null && typeof value === "object")
 		.map((value): SbxSandbox | undefined => {
 			if (typeof value.name !== "string" || !Array.isArray(value.workspaces)) return undefined;
