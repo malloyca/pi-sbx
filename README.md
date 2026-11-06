@@ -248,8 +248,8 @@ This fork is installed from Git, not published to npm. Its manifest is private,
 workflow jobs are guarded to run only in `ChristianMoesl/pi-sbx`, never this fork.
 Ordinary validation CI still runs here.
 
-Fork tags use `v<upstream-version>-malloy.<revision>` (for example
-`v0.7.2-malloy.1`), matching `package.json`. See
+Fork tags use `v<upstream-version>-malloyca.<revision>` (for example
+`v0.7.2-malloyca.1`), matching `package.json`. See
 [MAINTENANCE.md](MAINTENANCE.md) for the manual, approval-gated release steps.
 Do not run the retained upstream release/publishing helpers in this fork.
 

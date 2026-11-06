@@ -20,7 +20,7 @@
 ## Fork releases
 
 - This fork is installed by exact Git tag and is not published to npm.
-- Use `v<upstream-version>-malloy.<revision>` with a matching package version.
+- Use `v<upstream-version>-malloyca.<revision>` with a matching package version.
 - Never run retained upstream release or publishing helpers. Their workflows
   must remain guarded to run only in the upstream repository, not this fork.
 - Tagging, pushing, publishing, and changing the installed extension each

@@ -33,8 +33,8 @@ default; the recursion guard is the additional restriction.
 
 ## Version and tag convention
 
-For new releases use `v<upstream-version>-malloy.<revision>`, for example
-`v0.7.2-malloy.1`; keep `package.json`'s version identical without the leading `v`.
+For new releases use `v<upstream-version>-malloyca.<revision>`, for example
+`v0.7.2-malloyca.1`; keep `package.json`'s version identical without the leading `v`.
 Increment the fork revision for additional fork releases on that upstream base;
 reset it to 1 when adopting a new upstream release. Record any post-release
 upstream baseline commit above as well.
