@@ -1,6 +1,7 @@
 {
   "name": "@christianmoesl/pi-sbx",
-  "version": "0.4.5",
+  "version": "0.7.2",
+  "packageManager": "pnpm@12.4.2",
   "description": "Run Pi coding-agent tool calls inside Docker sbx sandboxes",
   "type": "module",
   "license": "MIT",
@@ -27,6 +28,7 @@
   },
   "files": [
     "extensions",
+    "docs",
     "LICENSE",
     "README.md"
   ],
@@ -47,11 +49,10 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --import ./test/setup.ts --test test/*.test.ts",
+    "test": "node --experimental-strip-types --import ./test/setup.ts --test test/*.test.ts scripts/*.test.mjs",
     "smoke": "pi --no-extensions -e . --offline --list-models __pi_sbx_smoke__",
-    "check": "npm run typecheck && npm test && npm run smoke",
-    "publish:npm": "./scripts/publish-npm.sh",
-    "release": "./scripts/release.sh",
-    "prepublishOnly": "npm run check"
-  }
+    "check": "pnpm run typecheck && pnpm test && pnpm run smoke",
+    "prepublishOnly": "pnpm run check"
+  },
+  "private": true
 }

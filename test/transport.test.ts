@@ -2,16 +2,17 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import { createSandboxBashCommand } from "../extensions/pi-sbx/index.ts";
-import { SBX_WORKER_SCRIPT, SbxTransport, type SpawnWorker } from "../extensions/pi-sbx/transport.ts";
+import { SBX_WORKER_SCRIPT, SbxConnectionError, SbxTransport, type SpawnWorker } from "../extensions/pi-sbx/transport.ts";
 
 const spawnLocalWorker: SpawnWorker = () =>
 	spawn(process.execPath, ["-e", SBX_WORKER_SCRIPT], {
+		env: { ...process.env, SBX_STARTUP_DIR: "" },
 		detached: true,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 
 function localTransport(): SbxTransport {
-	return new SbxTransport("test", process.cwd(), spawnLocalWorker);
+	return new SbxTransport("test", process.cwd(), { spawnWorker: spawnLocalWorker });
 }
 
 test("reuses one worker for concurrent commands and keeps output separated", async (t) => {
@@ -107,4 +108,62 @@ test("cancels timed-out commands without killing the worker", async (t) => {
 
 	const result = await transport.execute(process.cwd(), ["printf", "still-alive"]);
 	assert.equal(result.stdout.toString(), "still-alive");
+});
+
+test("uses the selected executable and maps worker and request cwd without rewriting command text", async (t) => {
+	const { WorkspacePaths } = await import("../extensions/pi-sbx/paths.ts");
+	const hostCwd = "/host/workspace";
+	const executable = "/path with spaces/sbx.exe";
+	let starts = 0;
+	const transport = new SbxTransport("test", hostCwd, {
+		executable,
+		paths: new WorkspacePaths([{ hostPath: hostCwd, sandboxPath: process.cwd() }]),
+		spawnWorker: (sandbox, cwd, command) => {
+			starts++;
+			assert.equal(sandbox, "test");
+			assert.equal(cwd, process.cwd());
+			assert.equal(command, executable);
+			return spawnLocalWorker(sandbox, cwd, command);
+		},
+	});
+	t.after(() => transport.dispose());
+	const result = await transport.execute(hostCwd, [
+		process.execPath, "-e", "console.log(process.cwd()); console.log(process.argv[1])", hostCwd,
+	]);
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.stdout.toString(), `${process.cwd()}\n${hostCwd}\n`);
+	assert.equal(starts, 1);
+});
+
+test("a broken worker input pipe reports connection loss instead of an unhandled error", async (t) => {
+	let child!: ReturnType<SpawnWorker>;
+	let failure: Error | undefined;
+	const transport = new SbxTransport("test", process.cwd(), {
+		spawnWorker: () => child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+			detached: true, stdio: ["pipe", "pipe", "pipe"],
+		}),
+		onFailure: (error) => { failure = error; },
+	});
+	t.after(() => transport.dispose());
+	const connecting = transport.connect();
+	child.stdin.emit("error", new Error("write EPIPE"));
+	await assert.rejects(connecting, SbxConnectionError);
+	assert.ok(failure instanceof SbxConnectionError);
+	assert.match(failure.message, /EPIPE/);
+});
+
+test("protocol frames after startup failure are ignored", async (t) => {
+	let failure: Error | undefined;
+	let initializing = 0;
+	const transport = new SbxTransport("test", process.cwd(), {
+		spawnWorker: () => spawn(process.execPath, ["-e",
+			`process.stdout.write(JSON.stringify({type: 'startup_error', message: 'failed'}) + '\\n' + JSON.stringify({type: 'ready'}) + '\\n' + JSON.stringify({type: 'initializing'}) + '\\n'); setInterval(() => {}, 1000);`,
+		], { detached: true, stdio: ["pipe", "pipe", "pipe"] }),
+		onInitializing: () => { initializing++; },
+		onFailure: (error) => { failure = error; },
+	});
+	t.after(() => transport.dispose());
+	await assert.rejects(transport.connect(), /failed/);
+	assert.equal(initializing, 0);
+	assert.ok(failure && !(failure instanceof SbxConnectionError), "initialization failure is terminal, not a reconnectable disconnect");
 });

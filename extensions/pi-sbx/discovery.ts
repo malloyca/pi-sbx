@@ -1,4 +1,7 @@
 import path from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isWsl } from "./cli.ts";
+import { isWindowsPath, relativeWithin, sandboxWorkspacePath, type WorkspaceMount } from "./paths.ts";
 
 export interface SbxSandbox {
 	name: string;
@@ -6,18 +9,14 @@ export interface SbxSandbox {
 	agent?: string;
 	status?: string;
 	workspaces: string[];
+	mounts: WorkspaceMount[];
 }
 
 function mountedPath(value: string): string {
 	return value.endsWith(":ro") ? value.slice(0, -3) : value;
 }
 
-function containsPath(root: string, value: string): boolean {
-	const relative = path.relative(path.resolve(root), path.resolve(value));
-	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-export function parseMatchingSandboxes(output: string, cwd: string): SbxSandbox[] {
+function parseSandboxList(output: string): Record<string, unknown>[] {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(output);
@@ -33,19 +32,31 @@ export function parseMatchingSandboxes(output: string, cwd: string): SbxSandbox[
 	} else {
 		throw new Error("Could not parse sbx ls --json output: expected an array or an object containing a sandboxes array");
 	}
+	return sandboxes.filter((value): value is Record<string, unknown> => value !== null && typeof value === "object");
+}
 
-	return sandboxes
-		.filter((value): value is Record<string, unknown> => value !== null && typeof value === "object")
+export function parseMatchingSandboxes(
+	output: string,
+	cwd: string,
+	toHostPath: (workspace: string) => string | undefined = (workspace) => workspace,
+): SbxSandbox[] {
+	return parseSandboxList(output)
 		.map((value): SbxSandbox | undefined => {
 			if (typeof value.name !== "string" || !Array.isArray(value.workspaces)) return undefined;
 			const workspaces = value.workspaces.filter((workspace): workspace is string => typeof workspace === "string");
-			if (!workspaces.some((workspace) => containsPath(mountedPath(workspace), cwd))) return undefined;
+			const mounts = workspaces.flatMap((workspace): WorkspaceMount[] => {
+				const source = mountedPath(workspace);
+				const hostPath = toHostPath(source);
+				return hostPath === undefined ? [] : [{ hostPath, sandboxPath: sandboxWorkspacePath(source) }];
+			});
+			if (!mounts.some((mount) => relativeWithin(mount.hostPath, cwd) !== undefined)) return undefined;
 			return {
 				name: value.name,
 				id: typeof value.id === "string" ? value.id : undefined,
 				agent: typeof value.agent === "string" ? value.agent : undefined,
 				status: typeof value.status === "string" ? value.status : undefined,
 				workspaces,
+				mounts,
 			};
 		})
 		.filter((value): value is SbxSandbox => value !== undefined)
@@ -54,4 +65,65 @@ export function parseMatchingSandboxes(output: string, cwd: string): SbxSandbox[
 			const rightRunning = right.status === "running" ? 0 : 1;
 			return leftRunning - rightRunning || left.name.localeCompare(right.name);
 		});
+}
+
+export async function discoverSandboxes(
+	exec: ExtensionAPI["exec"],
+	executable: string,
+	cwd: string,
+	wsl = isWsl(),
+	options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<SbxSandbox[]> {
+	const deadline = Date.now() + (options.timeoutMs ?? 10_000);
+	const remaining = () => {
+		if (options.signal?.aborted) throw new Error("aborted");
+		const milliseconds = deadline - Date.now();
+		if (milliseconds <= 0) throw new Error("Sandbox discovery timed out");
+		return milliseconds;
+	};
+	const nativeWsl = wsl && path.basename(executable) === "sbx";
+	const invoke = async (args: string[]) => {
+		const result = await exec(nativeWsl ? "env" : executable, nativeWsl ? ["DOCKER_SANDBOXES_ENABLE_VIRTIOFS_CACHE=0", executable, ...args] : args, { timeout: remaining(), signal: options.signal });
+		remaining();
+		if (result.code !== 0 || result.killed) {
+			throw new Error(result.stderr.trim() || `${executable} ${args.join(" ")} ${result.killed ? "timed out" : `exited with code ${result.code}`}`);
+		}
+		return result;
+	};
+	const version = await invoke(["version", "--json"]);
+	validateSbxVersion(version.stdout);
+	const result = await invoke(["ls", "--json"]);
+	if (!wsl) return parseMatchingSandboxes(result.stdout, cwd);
+
+	const hostPaths = new Map<string, string>();
+	const windowsWorkspaces = new Set(parseSandboxList(result.stdout).flatMap((sandbox) =>
+		Array.isArray(sandbox.workspaces)
+			? sandbox.workspaces.filter((value): value is string => typeof value === "string").map(mountedPath).filter(isWindowsPath)
+			: [],
+	));
+	for (const workspace of windowsWorkspaces) {
+		// wslpath understands distro aliases and custom automount roots. Never guess /mnt/<drive>.
+		const converted = await exec("wslpath", ["-u", workspace], { timeout: Math.min(5_000, remaining()), signal: options.signal });
+		remaining();
+		const hostPath = converted.stdout.replace(/\r?\n$/, "");
+		if (converted.code === 0 && !converted.killed && hostPath.startsWith("/")) {
+			hostPaths.set(workspace, hostPath);
+		}
+		// A workspace in another WSL distro may not be accessible from this one.
+	}
+	return parseMatchingSandboxes(result.stdout, cwd, (workspace) => isWindowsPath(workspace) ? hostPaths.get(workspace) : workspace);
+}
+
+/** Enforce a minimum stable CLI version; discovery validates the response schema. */
+export function validateSbxVersion(output: string): void {
+	let version: unknown;
+	try {
+		version = JSON.parse(output)?.client?.version;
+	} catch {
+		throw new Error("Could not parse sbx version --json output (SBX 0.48.0 or newer required)");
+	}
+	const parts = typeof version === "string" ? /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version) : null;
+	if (!parts || (Number(parts[1]) === 0 && Number(parts[2]) < 48)) {
+		throw new Error(`SBX 0.48.0 or newer required; found ${typeof version === "string" ? version : "no client version"}`);
+	}
 }

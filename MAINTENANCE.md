@@ -1,52 +1,91 @@
 # pi-sbx fork — maintenance
 
-Personal fork of [`ChristianMoesl/pi-sbx`](https://github.com/ChristianMoesl/pi-sbx).
-Deliberately **not upstreamed** — a small, personal mod. The `upstream` remote is
-fetch-only (push-disabled), for tracking upstream's development; we do not send
-changes back.
+Personal, Git-installed fork of [`ChristianMoesl/pi-sbx`](https://github.com/ChristianMoesl/pi-sbx).
+The `upstream` remote is fetch-only (push-disabled). Do not push to upstream or
+open pull requests for this personal fork.
 
-## What we changed (and why)
+## Upstream baseline
 
-One commit on top of the upstream base: the **recursion guard** — the
-`subagent` tool is blocked in child sessions (detected by `--no-session` /
-`--mode json` in the spawn argv), behind an extensible blocklist
-(`CHILD_SESSION_BLOCKED_TOOLS`). Purpose: no agent can spawn agents — this
-closes the recursion path and the prompt-injection path (untrusted text →
-"dispatch a write-privileged agent with fabricated data"). Everything else is
-upstream's, including the default-allow for extension tools (option B).
+Synced through upstream `4ac520f` (v0.7.2 plus three commits). Use merges, not
+rebases, to preserve the fork's published history and existing install tags.
 
-## Tag convention
+## Intentional fork differences
 
-Fork tags continue the upstream series: rebase onto upstream `vX.Y` →
-tag `vX.Y.1`. **The tag is the install pin** (`pi install
-git:github.com/malloyca/pi-sbx@<tag>`); the `package.json` version field is
-kept in sync with it.
+- **Recursion guard:** `subagent` is blocked in child sessions, detected by
+  `--no-session` or `--mode json` in argv. The extensible
+  `CHILD_SESSION_BLOCKED_TOOLS` check runs before routing/host-mode early returns,
+  so explicit host mode cannot bypass it. Top-level dispatch remains allowed.
+- **Discovery compatibility:** accept both a top-level sandbox array and an
+  object containing a `sandboxes` array. Retain the fork's handling of malformed
+  entries (ignore them) and mixed workspace arrays (keep only strings). Workspace
+  matching, read-only suffixes, running-first ordering, and upstream's WSL path
+  translation apply to both formats. Stable **SBX >=0.48.0** is still required;
+  accepting a legacy response shape does not imply support for older executables.
+- **Git-only distribution:** `package.json` is private; `release` and
+  `publish:npm` package scripts are not exposed. Every job in the retained
+  upstream release/publication workflows is guarded to run only in
+  `ChristianMoesl/pi-sbx`, never `malloyca/pi-sbx`. Ordinary validation CI remains
+  enabled. Do not run the upstream release/publishing helpers in this fork.
 
-## Update recipe (run when upstream moves)
+Everything else follows upstream, including fail-closed sandbox readiness and
+approval-gated host execution. Trusted extension tools still run on the host by
+default; the recursion guard is the additional restriction.
 
-In this clone (host-side; `sbx`/pi do not need to be running):
+## Version and tag convention
 
-1. `git fetch upstream`
-2. `git log --oneline v<current>..upstream/main` — **empty ⇒ nothing to do.**
-3. Read upstream's new commits first; then
-   `git rebase upstream/main v<current>` (replays the guard commit — it's one
-   commit, ~70 lines; a conflict means upstream restructured the router).
-4. Bump `package.json` `"version"` to match the new tag.
-5. `npm ci && npm test` — all tests, especially the 4 guard tests, must pass.
-6. `git commit` any rebase fixes, then
-   `git tag -f v<new-base>.1` (the tag moves to the tip — the force push in
-   step 7 is intentional and confined to our own fork).
-7. `git push origin main` and `git push --force origin v<new-base>.1`.
-8. `pi install git:github.com/malloyca/pi-sbx@v<new-base>.1` && `pi list`
-   — exactly one router, at the new tag.
-9. **Smoke test (safety-critical):** one sandboxed subagent dispatch —
-   child routes into the sandbox (`uname -s` → Linux), and the child's own
-   `subagent` call is blocked with the guard's message.
-10. A running pi session keeps the old router in memory until restart.
+For new releases use `v<upstream-version>-malloy.<revision>`, for example
+`v0.7.2-malloy.1`; keep `package.json`'s version identical without the leading `v`.
+Increment the fork revision for additional fork releases on that upstream base;
+reset it to 1 when adopting a new upstream release. Record any post-release
+upstream baseline commit above as well.
 
-## The two local copies (do not confuse them)
+This is valid semantic versioning, unlike a four-component `0.7.2.1` version.
+The suffix technically denotes a prerelease and sorts below upstream's stable
+version, which is fine because this fork is installed by its exact Git tag.
+Do not use `+metadata` to distinguish releases: semver ignores it for precedence.
+Historical tags (including `v0.4.5`) remain unchanged; never move published tags.
+
+## Update recipe
+
+1. Start with a clean `main` checkout and run `git fetch upstream`.
+2. Inspect `git log --oneline main..upstream/main` and the runtime, policy,
+   dependency, test, and CI changes before merging.
+3. `git merge --no-commit --no-ff upstream/main`; resolve conflicts while retaining
+   the intentional differences above. Check guards on **every** release job,
+   including new jobs/workflows, before any push.
+4. Update this baseline and, when preparing a release, `package.json` to the
+   intended fork version. Keep `pnpm-lock.yaml`; do not generate an npm lockfile.
+5. Use the pnpm version pinned in `package.json`:
+   `pnpm install --frozen-lockfile && pnpm run check && pnpm pack --dry-run`.
+6. Review `git diff upstream/main`, `git diff --check`, and all conflict
+   resolutions, then commit the validated merge on `main`.
+7. Only with explicit release/tag approval, create a new annotated install tag:
+   `git tag -a v<fork-version> -m 'v<fork-version>'`.
+8. Only with approval, push `main` and that exact new tag to `origin`. Never
+   force-push history or tags. No npm staging or publication is involved.
+9. Only with approval, install with
+   `pi install git:github.com/malloyca/pi-sbx@v<fork-version>` and verify `pi list`.
+   Restart Pi to replace the extension loaded in memory.
+10. Smoke-test sandboxed tool routing and a top-level subagent dispatch: the
+    child must route into the sandbox and its own `subagent` call must be blocked.
+    Verify explicit host mode does not bypass that guard. Unit fixtures do not
+    substitute for this live dispatch check.
+
+## Local copies and sandbox mounts
 
 | Copy | Path | Role |
 |------|------|------|
-| Working clone | `~/Development/pi-dev/pi-sbx` | dev tool: fetch/rebase/test/push. Nothing at runtime uses it. |
-| Installed copy | `~/.pi/agent/git/github.com/malloyca/pi-sbx` | what pi actually loads — **user-level, every pi session on this machine**. Only `pi install …@<tag>` updates it. Never hand-edit. |
+| Working clone | `~/Development/pi-dev/pi-sbx` | Development only; not loaded by Pi at runtime. |
+| Installed copy | `~/.pi/agent/git/github.com/malloyca/pi-sbx` | Pi's user-level install; update with `pi install`, never hand-edit. |
+
+The development sandbox mounts `~/Development/pi-dev` read/write and these
+host directories read-only:
+
+- `~/.pi/agent/install` — managed Pi releases, docs, examples, and dependencies;
+  mounting this stable parent avoids stale mounts after a managed Pi update.
+- `~/.pi/agent/extensions` — personal extensions.
+- `~/.pi/agent/git` — Git-installed packages.
+- `~/.pi/agent/npm` — npm-installed packages.
+
+Do not restore the obsolete Homebrew Pi mount or mount the entire Pi agent
+configuration directory, credentials, or sessions.
